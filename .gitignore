@@ -1,0 +1,7 @@
+__pycache__/
+checkpoints/
+venv/
+.env
+*.pyc
+*.cache
+client_secrets.json
