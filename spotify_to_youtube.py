@@ -57,10 +57,14 @@ def authenticate_youtube(request):
         flow = InstalledAppFlow.from_client_config(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
     else:
         flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_SCOPES)
+    # Ensure HTTPS for deployed app
+    redirect_uri = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://127.0.0.1:5000')}/youtube_callback"
+    if not redirect_uri.startswith("https://") and not redirect_uri.startswith("http://127.0.0.1"):
+        redirect_uri = "https://" + redirect_uri.split("://")[1]  # Force HTTPS for non-local
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true',
-        redirect_uri=f"{os.getenv('RENDER_EXTERNAL_URL', 'http://127.0.0.1:5000')}/youtube_callback"
+        redirect_uri=redirect_uri
     )
     session['state'] = state
     return redirect(authorization_url)
@@ -71,7 +75,11 @@ def finalize_youtube_auth(request):
         flow = InstalledAppFlow.from_client_config(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
     else:
         flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_SCOPES)
-    flow.redirect_uri = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://127.0.0.1:5000')}/youtube_callback"
+    # Ensure HTTPS for deployed app
+    redirect_uri = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://127.0.0.1:5000')}/youtube_callback"
+    if not redirect_uri.startswith("https://") and not redirect_uri.startswith("http://127.0.0.1"):
+        redirect_uri = "https://" + redirect_uri.split("://")[1]  # Force HTTPS for non-local
+    flow.redirect_uri = redirect_uri
     authorization_response = request.url
     flow.fetch_token(authorization_response=authorization_response)
     credentials = flow.credentials
