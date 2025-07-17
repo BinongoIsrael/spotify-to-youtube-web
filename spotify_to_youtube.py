@@ -16,8 +16,12 @@ SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/callback")
 SPOTIFY_SCOPE = "playlist-read-private"
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube"]
-YOUTUBE_CLIENT_SECRETS_FILE = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
+google_credentials = os.getenv("GOOGLE_CREDENTIALS")
+if not google_credentials:
+    raise ValueError("GOOGLE_CREDENTIALS environment variable is not set. Please configure it in Render.")
+YOUTUBE_CLIENT_SECRETS = json.loads(google_credentials)
 CHECKPOINT_DIR = "checkpoints"
+
 
 def authenticate_spotify():
     """Authenticate with Spotify API."""
@@ -30,8 +34,8 @@ def authenticate_spotify():
     ))
 
 def authenticate_youtube():
-    """Authenticate with YouTube API."""
-    flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_SCOPES)
+    """Authenticate with YouTube API using the credentials dictionary."""
+    flow = InstalledAppFlow.from_client_config(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
     credentials = flow.run_local_server(port=0)
     return build("youtube", "v3", credentials=credentials)
 
