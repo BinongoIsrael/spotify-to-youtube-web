@@ -5,3 +5,4 @@ venv/
 *.pyc
 *.cache
 client_secrets.json
+client_secrets_web.json

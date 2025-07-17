@@ -1,7 +1,7 @@
 from flask import Flask, render_template, request, redirect, url_for, session
 import os
 from dotenv import load_dotenv
-from spotify_to_youtube import authenticate_spotify, authenticate_youtube, get_spotify_playlists, get_playlist_tracks, create_youtube_playlist, add_video_to_playlist, search_youtube_video, load_checkpoint, save_checkpoint, finalize_youtube_auth
+from spotify_to_youtube import authenticate_spotify, authenticate_youtube, get_spotify_playlists, get_playlist_tracks, create_youtube_playlist, add_video_to_playlist, search_youtube_video, load_checkpoint, save_checkpoint, finalize_spotify_auth, finalize_youtube_auth
 import time
 
 app = Flask(__name__)
@@ -15,12 +15,35 @@ def index():
 
 @app.route('/login')
 def login():
-    sp = authenticate_spotify()
     if not session.get('spotify_authenticated'):
-        playlists = get_spotify_playlists(sp)
-        session['spotify_authenticated'] = True
-        return render_template('select_playlist.html', playlists=playlists)
-    return redirect(url_for('index'))
+        return authenticate_spotify()
+    return redirect(url_for('select_playlist'))
+
+@app.route('/spotify_callback')
+def spotify_callback():
+    if 'spotify_oauth_state' not in session or session['spotify_oauth_state'] != request.args.get('state'):
+        return "Invalid state parameter", 400
+    sp_oauth = SpotifyOAuth(
+        client_id=os.getenv("SPOTIFY_CLIENT_ID"),
+        client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
+        redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/callback"),
+        scope="playlist-read-private"
+    )
+    if 'code' in request.args:
+        token_info = sp_oauth.get_access_token(request.args['code'])
+        session['spotify_token'] = token_info['access_token']
+    session['spotify_authenticated'] = True
+    return redirect(url_for('select_playlist'))
+
+@app.route('/select_playlist')
+def select_playlist():
+    if not session.get('spotify_authenticated'):
+        return redirect(url_for('login'))
+    if not session.get('spotify_token'):
+        return redirect(url_for('login'))
+    sp = spotipy.Spotify(auth=session['spotify_token'])
+    playlists = get_spotify_playlists(sp)
+    return render_template('select_playlist.html', playlists=playlists)
 
 @app.route('/transfer', methods=['POST'])
 def transfer():
@@ -28,7 +51,8 @@ def transfer():
     youtube = finalize_youtube_auth(request) if not session.get('youtube_authenticated') else authenticate_youtube(request)
     session['youtube_authenticated'] = True
 
-    sp = authenticate_spotify()
+    sp = finalize_spotify_auth(request) if not session.get('spotify_authenticated') else eval(session.get('spotify_instance'))
+    session['spotify_authenticated'] = True
     playlist_id = request.form['playlist_id']
     checkpoint = load_checkpoint(playlist_id)
     youtube_playlist_id = checkpoint.get('youtube_playlist_id')
