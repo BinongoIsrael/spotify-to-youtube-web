@@ -90,6 +90,7 @@ def finalize_youtube_auth(request):
     flow.fetch_token(authorization_response=authorization_response)
     credentials = flow.credentials
     return build("youtube", "v3", credentials=credentials)
+
 def get_spotify_playlists(sp):
     """Get user's Spotify playlists with track counts."""
     playlists = sp.current_user_playlists(limit=50)
