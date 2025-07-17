@@ -5,66 +5,47 @@ from spotify_to_youtube import authenticate_spotify, authenticate_youtube, get_s
 import time
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
-import logging
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 load_dotenv()
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
 
 @app.route('/')
 def index():
+    print("Debug: Entering index")
     return render_template('index.html')
 
 @app.route('/login')
 def login():
-    logger.debug(f"Login - spotify_authenticated={session.get('spotify_authenticated')}, session_id={id(session)}")
+    print("Debug: Entering login, spotify_authenticated=", session.get('spotify_authenticated'))
     if not session.get('spotify_authenticated'):
-        logger.debug("Redirecting to authenticate_spotify")
+        print("Debug: Redirecting to authenticate_spotify")
         return authenticate_spotify()
-    logger.debug("Redirecting to select_playlist")
+    print("Debug: Redirecting to select_playlist")
     return redirect(url_for('select_playlist'))
 
 @app.route('/select_playlist')
 def select_playlist():
-    logger.debug(f"Select Playlist - spotify_authenticated={session.get('spotify_authenticated')}, youtube_authenticated={session.get('youtube_authenticated')}, spotify_token={session.get('spotify_token')}, session_id={id(session)}")
+    print("Debug: Entering select_playlist, spotify_authenticated=", session.get('spotify_authenticated'), ", youtube_authenticated=", session.get('youtube_authenticated'), ", spotify_token=", session.get('spotify_token'))
     if not session.get('spotify_authenticated'):
-        logger.debug("Redirecting to login (spotify not authenticated)")
+        print("Debug: Redirecting to login (spotify not authenticated)")
         return redirect(url_for('login'))
     if not session.get('youtube_authenticated'):
-        logger.debug("Redirecting to login (youtube not authenticated)")
+        print("Debug: Redirecting to login (youtube not authenticated)")
         return redirect(url_for('login'))
     if not session.get('spotify_token'):
-        logger.debug("Redirecting to login (no spotify token)")
+        print("Debug: Redirecting to login (no spotify token)")
         return redirect(url_for('login'))
     sp = spotipy.Spotify(auth=session['spotify_token'])
     playlists = get_spotify_playlists(sp)
-    logger.debug("Rendering select_playlist.html")
-    return render_template('select_playlist.html', playlists=playlists)
-
-@app.route('/select_playlist')
-def select_playlist():
-    logger.debug(f"Select Playlist - spotify_authenticated={session.get('spotify_authenticated')}, youtube_authenticated={session.get('youtube_authenticated')}, spotify_token={session.get('spotify_token')}, session_id={id(session)}")
-    if not session.get('spotify_authenticated'):
-        logger.debug("Redirecting to login (spotify not authenticated)")
-        return redirect(url_for('login'))
-    if not session.get('youtube_authenticated'):
-        logger.debug("Redirecting to login (youtube not authenticated)")
-        return redirect(url_for('login'))
-    if not session.get('spotify_token'):
-        logger.debug("Redirecting to login (no spotify token)")
-        return redirect(url_for('login'))
-    sp = spotipy.Spotify(auth=session['spotify_token'])
-    playlists = get_spotify_playlists(sp)
-    logger.debug("Rendering select_playlist.html")
+    print("Debug: Rendering select_playlist.html")
     return render_template('select_playlist.html', playlists=playlists)
 
 @app.route('/spotify_callback')
 def spotify_callback():
-    logger.debug(f"Spotify Callback - state={request.args.get('state')}, code={request.args.get('code')}, session_id={id(session)}")
+    print("Debug: Entering spotify_callback, state=", request.args.get('state'), ", code=", request.args.get('code'))
     if 'spotify_oauth_state' not in session or session['spotify_oauth_state'] != request.args.get('state'):
-        logger.debug("Invalid state parameter")
+        print("Debug: Invalid state parameter")
         return "Invalid state parameter", 400
     sp_oauth = SpotifyOAuth(
         client_id=os.getenv("SPOTIFY_CLIENT_ID"),
@@ -75,30 +56,28 @@ def spotify_callback():
     if 'code' in request.args:
         token_info = sp_oauth.get_access_token(request.args['code'])
         session['spotify_token'] = token_info['access_token']
-        logger.debug("Spotify token set")
+        print("Debug: Spotify token set")
     session['spotify_authenticated'] = True
-    logger.debug("Spotify authenticated, redirecting to select_playlist")
+    print("Debug: Spotify authenticated, redirecting to select_playlist")
     return redirect(url_for('select_playlist'))
 
 @app.route('/youtube_callback')
 def youtube_callback():
-    logger.debug(f"YouTube Callback - state={request.args.get('state')}, code={request.args.get('code')}, session_id={id(session)}")
+    print("Debug: Entering youtube_callback, state=", request.args.get('state'), ", code=", request.args.get('code'))
     if 'state' not in session or session['state'] != request.args.get('state'):
-        logger.debug("Invalid state parameter")
+        print("Debug: Invalid state parameter")
         return "Invalid state parameter", 400
-    try:
-        youtube = finalize_youtube_auth(request)
-        session['youtube_authenticated'] = True
-        session['youtube_instance'] = str(youtube)
-        logger.debug("YouTube authenticated, redirecting to select_playlist")
-    except Exception as e:
-        logger.error(f"YouTube auth failed: {e}")
-        return "YouTube authentication failed", 500
+    youtube = finalize_youtube_auth(request)
+    session['youtube_authenticated'] = True
+    session['youtube_instance'] = str(youtube)
+    print("Debug: YouTube authenticated, redirecting to select_playlist")
     return redirect(url_for('select_playlist'))
-    
+
 @app.route('/transfer', methods=['POST'])
 def transfer():
+    print("Debug: Entering transfer, youtube_authenticated=", session.get('youtube_authenticated'), ", spotify_authenticated=", session.get('spotify_authenticated'))
     if not session.get('youtube_authenticated') or not session.get('spotify_authenticated'):
+        print("Debug: Redirecting to login (authentication failed)")
         return redirect(url_for('login'))
     youtube = eval(session['youtube_instance'])  # Retrieve YouTube instance
     sp = spotipy.Spotify(auth=session['spotify_token'])
@@ -109,6 +88,7 @@ def transfer():
     if not youtube_playlist_id:
         tracks = get_playlist_tracks(sp, playlist_id)
         if not tracks:
+            print("Debug: No tracks found")
             return render_template('transfer_status.html', message="No tracks found in the playlist.")
         playlist_name = next((p['name'] for p in get_spotify_playlists(sp) if p['id'] == playlist_id), 'New Playlist')
         youtube_playlist_id = create_youtube_playlist(youtube, playlist_name, f"Transferred from Spotify: {playlist_name}")
@@ -116,10 +96,11 @@ def transfer():
     else:
         tracks = get_playlist_tracks(sp, playlist_id)
         if not tracks:
+            print("Debug: Failed to reload playlist tracks")
             return render_template('transfer_status.html', message="Failed to reload playlist tracks.")
 
     total_tracks = len(tracks)
-    print(f"Total tracks: {total_tracks}, First track: {tracks[0]['track']['name'] if tracks else 'None'}")
+    print(f"Debug: Total tracks: {total_tracks}, First track: {tracks[0]['track']['name'] if tracks else 'None'}")
     last_index = checkpoint.get('last_track_index', -1) + 1
     added_tracks = 0
     unmatched_tracks = []
@@ -134,25 +115,26 @@ def transfer():
             track_info = track.get('track', {})
             if not track_info or 'name' not in track_info or 'artists' not in track_info or not track_info['artists']:
                 unmatched_tracks.append(f"Invalid track at index {current_index}")
-                print(f"Skipping invalid track at index {current_index}")
+                print(f"Debug: Skipping invalid track at index {current_index}")
                 continue
             track_name = track_info['name']
             artist = track_info['artists'][0]['name']
-            print(f"Searching for: {track_name} by {artist}")
+            print(f"Debug: Searching for: {track_name} by {artist}")
             video_id = search_youtube_video(youtube, track_name, artist)
             if video_id:
                 try:
                     add_video_to_playlist(youtube, youtube_playlist_id, video_id)
                     added_tracks += 1
                     save_checkpoint(playlist_id, youtube_playlist_id, current_index)
-                    print(f"Added: {track_name}")
+                    print(f"Debug: Added: {track_name}")
                 except Exception as e:
-                    print(f"Failed to add {track_name}: {e}")
+                    print(f"Debug: Failed to add {track_name}: {e}")
                     if 'quotaExceeded' in str(e):
+                        print("Debug: Quota exceeded")
                         return render_template('transfer_status.html', message=f"Quota exceeded after {added_tracks}/{total_tracks} tracks. Resume after 12:00 AM PST (July 18, 2025).")
             else:
                 unmatched_tracks.append(f"{track_name} by {artist}")
-                print(f"Not found: {track_name}")
+                print(f"Debug: Not found: {track_name}")
         time.sleep(60)  # Wait 1 minute between batches
 
     status = f"Transferred {added_tracks}/{total_tracks} tracks successfully!"
@@ -160,14 +142,17 @@ def transfer():
         status += "\nCould not find the following tracks on YouTube:"
         for track in unmatched_tracks:
             status += f"\n- {track}"
+    print("Debug: Transfer complete, rendering status")
     session.clear()
     return render_template('transfer_status.html', message=status)
 
 @app.route('/logout')
 def logout():
+    print("Debug: Entering logout")
     session.clear()
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
+    print("Debug: Starting app")
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
