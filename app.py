@@ -1,11 +1,11 @@
 from flask import Flask, render_template, request, redirect, url_for, session
 import os
 from dotenv import load_dotenv
-from spotify_to_youtube import authenticate_spotify, authenticate_youtube, get_spotify_playlists, get_playlist_tracks, create_youtube_playlist, add_video_to_playlist, search_youtube_video, load_checkpoint, save_checkpoint
+from spotify_to_youtube import authenticate_spotify, authenticate_youtube, get_spotify_playlists, get_playlist_tracks, create_youtube_playlist, add_video_to_playlist, search_youtube_video, load_checkpoint, save_checkpoint, finalize_youtube_auth
 import time
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)  # For session management
+app.secret_key = os.urandom(24)
 load_dotenv()
 
 # Routes
@@ -24,12 +24,11 @@ def login():
 
 @app.route('/transfer', methods=['POST'])
 def transfer():
-    # Reset session authentication on each new transfer attempt
     session.pop('youtube_authenticated', None)
-    youtube = authenticate_youtube()  # Fresh authentication
+    youtube = finalize_youtube_auth(request) if not session.get('youtube_authenticated') else authenticate_youtube(request)
     session['youtube_authenticated'] = True
 
-    sp = authenticate_spotify()  # Refresh Spotify authentication
+    sp = authenticate_spotify()
     playlist_id = request.form['playlist_id']
     checkpoint = load_checkpoint(playlist_id)
     youtube_playlist_id = checkpoint.get('youtube_playlist_id')
@@ -47,7 +46,7 @@ def transfer():
             return render_template('transfer_status.html', message="Failed to reload playlist tracks.")
 
     total_tracks = len(tracks)
-    print(f"Total tracks: {total_tracks}, First track: {tracks[0]['track']['name'] if tracks else 'None'}")  # Debug first track
+    print(f"Total tracks: {total_tracks}, First track: {tracks[0]['track']['name'] if tracks else 'None'}")
     last_index = checkpoint.get('last_track_index', -1) + 1
     added_tracks = 0
     unmatched_tracks = []
@@ -57,7 +56,7 @@ def transfer():
         batch = tracks[i:i + batch_size]
         for j, track in enumerate(batch):
             current_index = i + j
-            if current_index <= last_index and current_index > 0:  # Allow first track if last_index is -1
+            if current_index <= last_index and current_index > 0:
                 continue
             track_info = track.get('track', {})
             if not track_info or 'name' not in track_info or 'artists' not in track_info or not track_info['artists']:
@@ -77,7 +76,7 @@ def transfer():
                 except Exception as e:
                     print(f"Failed to add {track_name}: {e}")
                     if 'quotaExceeded' in str(e):
-                        return render_template('transfer_status.html', message=f"Quota exceeded after {added_tracks}/{total_tracks} tracks. Resume after 12:00 AM PST (July 17, 2025).")
+                        return render_template('transfer_status.html', message=f"Quota exceeded after {added_tracks}/{total_tracks} tracks. Resume after 12:00 AM PST (July 18, 2025).")
             else:
                 unmatched_tracks.append(f"{track_name} by {artist}")
                 print(f"Not found: {track_name}")
@@ -88,9 +87,16 @@ def transfer():
         status += "\nCould not find the following tracks on YouTube:"
         for track in unmatched_tracks:
             status += f"\n- {track}"
-    # Clear session data after transfer to allow new runs
     session.clear()
     return render_template('transfer_status.html', message=status)
+
+@app.route('/youtube_callback')
+def youtube_callback():
+    if 'state' not in session or session['state'] != request.args.get('state'):
+        return "Invalid state parameter", 400
+    youtube = finalize_youtube_auth(request)
+    session['youtube_authenticated'] = True
+    return redirect(url_for('index'))
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
