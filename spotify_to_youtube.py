@@ -76,9 +76,12 @@ def finalize_youtube_auth(request):
     redirect_uri = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://127.0.0.1:5000')}/youtube_callback"
     if not redirect_uri.startswith("https://") and not redirect_uri.startswith("http://127.0.0.1"):
         redirect_uri = "https://" + redirect_uri.split("://")[1]
-    print(f"Using redirect URI: {redirect_uri}")  # Debug output
+    print(f"Debug: RENDER_EXTERNAL_URL={os.getenv('RENDER_EXTERNAL_URL')}")
+    print(f"Debug: Initial redirect_uri={redirect_uri}")
+    print(f"Debug: Request URL={request.url}")
     flow.redirect_uri = redirect_uri
     authorization_response = request.url
+    print(f"Debug: Authorization response={authorization_response}")
     flow.fetch_token(authorization_response=authorization_response)
     credentials = flow.credentials
     return build("youtube", "v3", credentials=credentials)
