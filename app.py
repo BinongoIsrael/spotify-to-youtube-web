@@ -16,9 +16,23 @@ def index():
 
 @app.route('/login')
 def login():
+    print(f"Debug: Login - spotify_authenticated={session.get('spotify_authenticated')}")
     if not session.get('spotify_authenticated'):
         return authenticate_spotify()
     return redirect(url_for('select_playlist'))
+
+@app.route('/select_playlist')
+def select_playlist():
+    print(f"Debug: Select Playlist - spotify_authenticated={session.get('spotify_authenticated')}, youtube_authenticated={session.get('youtube_authenticated')}, spotify_token={session.get('spotify_token')}")
+    if not session.get('spotify_authenticated'):
+        return redirect(url_for('login'))
+    if not session.get('youtube_authenticated'):
+        return redirect(url_for('login'))
+    if not session.get('spotify_token'):
+        return redirect(url_for('login'))
+    sp = spotipy.Spotify(auth=session['spotify_token'])
+    playlists = get_spotify_playlists(sp)
+    return render_template('select_playlist.html', playlists=playlists)
 
 @app.route('/spotify_callback')
 def spotify_callback():
@@ -44,18 +58,6 @@ def youtube_callback():
     session['youtube_authenticated'] = True
     session['youtube_instance'] = str(youtube)  # Store YouTube instance
     return redirect(url_for('select_playlist'))
-
-@app.route('/select_playlist')
-def select_playlist():
-    if not session.get('spotify_authenticated'):
-        return redirect(url_for('login'))
-    if not session.get('youtube_authenticated'):
-        return redirect(url_for('login'))
-    if not session.get('spotify_token'):
-        return redirect(url_for('login'))
-    sp = spotipy.Spotify(auth=session['spotify_token'])
-    playlists = get_spotify_playlists(sp)
-    return render_template('select_playlist.html', playlists=playlists)
 
 @app.route('/transfer', methods=['POST'])
 def transfer():
