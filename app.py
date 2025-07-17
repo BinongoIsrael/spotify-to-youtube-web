@@ -3,6 +3,7 @@ import os
 from dotenv import load_dotenv
 from spotify_to_youtube import authenticate_spotify, authenticate_youtube, get_spotify_playlists, get_playlist_tracks, create_youtube_playlist, add_video_to_playlist, search_youtube_video, load_checkpoint, save_checkpoint, finalize_spotify_auth, finalize_youtube_auth
 import time
+from spotipy.oauth2 import SpotifyOAuth  # Add this import
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -26,7 +27,7 @@ def spotify_callback():
     sp_oauth = SpotifyOAuth(
         client_id=os.getenv("SPOTIFY_CLIENT_ID"),
         client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
-        redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/callback"),
+        redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/spotify_callback"),
         scope="playlist-read-private"
     )
     if 'code' in request.args:
@@ -51,7 +52,7 @@ def transfer():
     youtube = finalize_youtube_auth(request) if not session.get('youtube_authenticated') else authenticate_youtube(request)
     session['youtube_authenticated'] = True
 
-    sp = finalize_spotify_auth(request) if not session.get('spotify_authenticated') else eval(session.get('spotify_instance'))
+    sp = spotipy.Spotify(auth=session['spotify_token']) if session.get('spotify_token') else finalize_spotify_auth(request)
     session['spotify_authenticated'] = True
     playlist_id = request.form['playlist_id']
     checkpoint = load_checkpoint(playlist_id)
