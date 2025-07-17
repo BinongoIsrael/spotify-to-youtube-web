@@ -7,6 +7,7 @@ from googleapiclient.discovery import build
 from urllib.parse import urlencode, urlparse, parse_qs
 import pickle
 from pathlib import Path
+from flask import redirect, session, request
 
 # Configuration
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
@@ -15,26 +16,47 @@ SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/
 SPOTIFY_SCOPE = "playlist-read-private"
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube"]
 
-# Handle GOOGLE_CREDENTIALS
-google_credentials = os.getenv("GOOGLE_CREDENTIALS")
-if not google_credentials:
-    raise ValueError("GOOGLE_CREDENTIALS environment variable is not set. Please configure it in Render.")
-YOUTUBE_CLIENT_SECRETS = json.loads(google_credentials)
+# Handle credentials based on environment
+if os.getenv("RENDER_EXTERNAL_URL"):  # Deployed on Render
+    google_credentials = os.getenv("GOOGLE_CREDENTIALS")
+    if not google_credentials:
+        raise ValueError("GOOGLE_CREDENTIALS environment variable is not set. Please configure it in Render.")
+    YOUTUBE_CLIENT_SECRETS = json.loads(google_credentials)
+else:  # Local development
+    YOUTUBE_CLIENT_SECRETS_FILE = "client_secrets.json"  # Use original for local
 
 def authenticate_spotify():
-    """Authenticate with Spotify API."""
+    """Initiate Spotify API authentication with web-based flow."""
     sp_oauth = SpotifyOAuth(
         client_id=SPOTIFY_CLIENT_ID,
         client_secret=SPOTIFY_CLIENT_SECRET,
         redirect_uri=SPOTIFY_REDIRECT_URI,
         scope=SPOTIFY_SCOPE
     )
-    token_info = sp_oauth.get_access_token(as_dict=True)
+    auth_url = sp_oauth.get_authorize_url()
+    session['spotify_oauth_state'] = sp_oauth.state
+    return redirect(auth_url)
+
+def finalize_spotify_auth(request):
+    """Finalize Spotify authentication after callback."""
+    sp_oauth = SpotifyOAuth(
+        client_id=SPOTIFY_CLIENT_ID,
+        client_secret=SPOTIFY_CLIENT_SECRET,
+        redirect_uri=SPOTIFY_REDIRECT_URI,
+        scope=SPOTIFY_SCOPE
+    )
+    if 'code' not in request.args or session.get('spotify_oauth_state') != request.args.get('state'):
+        return "Invalid authorization code or state", 400
+    code = request.args.get('code')
+    token_info = sp_oauth.get_access_token(code)
     return spotipy.Spotify(auth=token_info['access_token'])
 
 def authenticate_youtube(request):
     """Initiate YouTube API authentication with web-based flow."""
-    flow = InstalledAppFlow.from_client_config(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
+    if os.getenv("RENDER_EXTERNAL_URL"):
+        flow = InstalledAppFlow.from_client_config(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_SCOPES)
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true',
@@ -45,7 +67,10 @@ def authenticate_youtube(request):
 
 def finalize_youtube_auth(request):
     """Finalize YouTube authentication after callback."""
-    flow = InstalledAppFlow.from_client_config(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
+    if os.getenv("RENDER_EXTERNAL_URL"):
+        flow = InstalledAppFlow.from_client_config(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
+    else:
+        flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_SCOPES)
     flow.redirect_uri = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:5000')}/youtube_callback"
     authorization_response = request.url
     flow.fetch_token(authorization_response=authorization_response)
