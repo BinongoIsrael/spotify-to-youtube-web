@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 from spotify_to_youtube import authenticate_spotify, authenticate_youtube, get_spotify_playlists, get_playlist_tracks, create_youtube_playlist, add_video_to_playlist, search_youtube_video, load_checkpoint, save_checkpoint, finalize_spotify_auth, finalize_youtube_auth
 import time
 from spotipy.oauth2 import SpotifyOAuth  # Add this import
-
+import spotipy
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 load_dotenv()
