@@ -3,13 +3,13 @@ import os
 from dotenv import load_dotenv
 from spotify_to_youtube import authenticate_spotify, authenticate_youtube, get_spotify_playlists, get_playlist_tracks, create_youtube_playlist, add_video_to_playlist, search_youtube_video, load_checkpoint, save_checkpoint, finalize_spotify_auth, finalize_youtube_auth
 import time
-from spotipy.oauth2 import SpotifyOAuth  # Add this import
 import spotipy
+from spotipy.oauth2 import SpotifyOAuth
+
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 load_dotenv()
 
-# Routes
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -36,9 +36,20 @@ def spotify_callback():
     session['spotify_authenticated'] = True
     return redirect(url_for('select_playlist'))
 
+@app.route('/youtube_callback')
+def youtube_callback():
+    if 'state' not in session or session['state'] != request.args.get('state'):
+        return "Invalid state parameter", 400
+    youtube = finalize_youtube_auth(request)
+    session['youtube_authenticated'] = True
+    session['youtube_instance'] = str(youtube)  # Store YouTube instance
+    return redirect(url_for('select_playlist'))
+
 @app.route('/select_playlist')
 def select_playlist():
     if not session.get('spotify_authenticated'):
+        return redirect(url_for('login'))
+    if not session.get('youtube_authenticated'):
         return redirect(url_for('login'))
     if not session.get('spotify_token'):
         return redirect(url_for('login'))
@@ -48,12 +59,10 @@ def select_playlist():
 
 @app.route('/transfer', methods=['POST'])
 def transfer():
-    session.pop('youtube_authenticated', None)
-    youtube = finalize_youtube_auth(request) if not session.get('youtube_authenticated') else authenticate_youtube(request)
-    session['youtube_authenticated'] = True
-
-    sp = spotipy.Spotify(auth=session['spotify_token']) if session.get('spotify_token') else finalize_spotify_auth(request)
-    session['spotify_authenticated'] = True
+    if not session.get('youtube_authenticated') or not session.get('spotify_authenticated'):
+        return redirect(url_for('login'))
+    youtube = eval(session['youtube_instance'])  # Retrieve YouTube instance
+    sp = spotipy.Spotify(auth=session['spotify_token'])
     playlist_id = request.form['playlist_id']
     checkpoint = load_checkpoint(playlist_id)
     youtube_playlist_id = checkpoint.get('youtube_playlist_id')
@@ -115,12 +124,9 @@ def transfer():
     session.clear()
     return render_template('transfer_status.html', message=status)
 
-@app.route('/youtube_callback')
-def youtube_callback():
-    if 'state' not in session or session['state'] != request.args.get('state'):
-        return "Invalid state parameter", 400
-    youtube = finalize_youtube_auth(request)
-    session['youtube_authenticated'] = True
+@app.route('/logout')
+def logout():
+    session.clear()
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
