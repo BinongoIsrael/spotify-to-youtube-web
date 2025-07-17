@@ -79,13 +79,17 @@ def finalize_youtube_auth(request):
     print(f"Debug: RENDER_EXTERNAL_URL={os.getenv('RENDER_EXTERNAL_URL')}")
     print(f"Debug: Initial redirect_uri={redirect_uri}")
     print(f"Debug: Request URL={request.url}")
-    flow.redirect_uri = redirect_uri
+    # Force HTTPS if deployed
     authorization_response = request.url
-    print(f"Debug: Authorization response={authorization_response}")
+    if os.getenv("RENDER_EXTERNAL_URL") and not authorization_response.startswith("https://"):
+        from urllib.parse import urlparse, urlunparse
+        parsed_url = urlparse(authorization_response)
+        authorization_response = urlunparse(("https",) + parsed_url[1:])
+    print(f"Debug: Adjusted authorization_response={authorization_response}")
+    flow.redirect_uri = redirect_uri
     flow.fetch_token(authorization_response=authorization_response)
     credentials = flow.credentials
     return build("youtube", "v3", credentials=credentials)
-
 def get_spotify_playlists(sp):
     """Get user's Spotify playlists with track counts."""
     playlists = sp.current_user_playlists(limit=50)
