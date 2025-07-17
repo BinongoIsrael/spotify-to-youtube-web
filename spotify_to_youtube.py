@@ -12,7 +12,7 @@ from flask import redirect, session, request
 # Configuration
 SPOTIFY_CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
-SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/callback")
+SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/spotify_callback")
 SPOTIFY_SCOPE = "playlist-read-private"
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube"]
 
@@ -23,7 +23,7 @@ if os.getenv("RENDER_EXTERNAL_URL"):  # Deployed on Render
         raise ValueError("GOOGLE_CREDENTIALS environment variable is not set. Please configure it in Render.")
     YOUTUBE_CLIENT_SECRETS = json.loads(google_credentials)
 else:  # Local development
-    YOUTUBE_CLIENT_SECRETS_FILE = "client_secrets.json"  # Use original for local
+    YOUTUBE_CLIENT_SECRETS_FILE = "client_secrets.json"
 
 def authenticate_spotify():
     """Initiate Spotify API authentication with web-based flow."""
@@ -60,7 +60,7 @@ def authenticate_youtube(request):
     authorization_url, state = flow.authorization_url(
         access_type='offline',
         include_granted_scopes='true',
-        redirect_uri=f"{os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:5000')}/youtube_callback"
+        redirect_uri=f"{os.getenv('RENDER_EXTERNAL_URL', 'http://127.0.0.1:5000')}/youtube_callback"
     )
     session['state'] = state
     return redirect(authorization_url)
@@ -71,16 +71,25 @@ def finalize_youtube_auth(request):
         flow = InstalledAppFlow.from_client_config(YOUTUBE_CLIENT_SECRETS, YOUTUBE_SCOPES)
     else:
         flow = InstalledAppFlow.from_client_secrets_file(YOUTUBE_CLIENT_SECRETS_FILE, YOUTUBE_SCOPES)
-    flow.redirect_uri = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://localhost:5000')}/youtube_callback"
+    flow.redirect_uri = f"{os.getenv('RENDER_EXTERNAL_URL', 'http://127.0.0.1:5000')}/youtube_callback"
     authorization_response = request.url
     flow.fetch_token(authorization_response=authorization_response)
     credentials = flow.credentials
     return build("youtube", "v3", credentials=credentials)
 
 def get_spotify_playlists(sp):
-    """Get user's Spotify playlists."""
+    """Get user's Spotify playlists with track counts."""
     playlists = sp.current_user_playlists(limit=50)
-    return [{"id": p["id"], "name": p["name"]} for p in playlists["items"]]
+    result = []
+    for playlist in playlists["items"]:
+        playlist_id = playlist["id"]
+        detailed_playlist = sp.playlist(playlist_id, fields="id,name,tracks(total)")
+        result.append({
+            "id": detailed_playlist["id"],
+            "name": detailed_playlist["name"],
+            "tracks": {"total": detailed_playlist["tracks"]["total"]}
+        })
+    return result
 
 def get_playlist_tracks(sp, playlist_id):
     """Get tracks from a Spotify playlist."""
