@@ -16,7 +16,7 @@ SPOTIFY_CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 SPOTIFY_REDIRECT_URI = os.getenv("SPOTIFY_REDIRECT_URI", "http://127.0.0.1:5000/callback")
 SPOTIFY_SCOPE = "playlist-read-private"
 YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube"]
-YOUTUBE_CLIENT_SECRETS_FILE = "client_secrets.json"
+YOUTUBE_CLIENT_SECRETS_FILE = json.loads(os.getenv("GOOGLE_CREDENTIALS"))
 CHECKPOINT_DIR = "checkpoints"
 
 def authenticate_spotify():
