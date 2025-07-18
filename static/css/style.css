@@ -1,0 +1,35 @@
+body {
+    font-family: Arial, sans-serif;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px;
+    background-color: #f4f4f4;
+}
+h1 {
+    color: #1DB954; /* Spotify green */
+}
+.btn {
+    display: inline-block;
+    padding: 10px 20px;
+    background-color: #FF0000; /* YouTube red */
+    color: white;
+    text-decoration: none;
+    border-radius: 5px;
+}
+.btn:hover {
+    background-color: #cc0000;
+}
+ul {
+    list-style: none;
+    padding: 0;
+}
+li {
+    margin: 10px 0;
+}
+li a {
+    color: #FF0000;
+    text-decoration: none;
+}
+li a:hover {
+    text-decoration: underline;
+}
