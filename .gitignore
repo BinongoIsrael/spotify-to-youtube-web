@@ -1,8 +1,7 @@
 __pycache__/
-checkpoints/
 venv/
 .env
 *.pyc
 *.cache
 client_secrets.json
-client_secrets_web.json
+data/transfer_progress.json
