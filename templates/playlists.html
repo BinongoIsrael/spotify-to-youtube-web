@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Select Playlist</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <h1>Select a Spotify Playlist</h1>
+    <ul>
+    {% for playlist in playlists %}
+        <li><a href="{{ url_for('transfer', playlist_id=playlist.id) }}">{{ playlist.name }}</a></li>
+    {% endfor %}
+    </ul>
+</body>
+</html>
