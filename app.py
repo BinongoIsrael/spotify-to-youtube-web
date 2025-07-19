@@ -187,7 +187,7 @@ def google_callback():
             client_secrets_file,
             scopes=["https://www.googleapis.com/auth/youtube"],
             state=state,
-            redirect_uri="https://your-app-name.herokuapp.com/google-callback" if os.getenv("HEROKU_APP_NAME") else "http://127.0.0.1:5000/google-callback"
+            redirect_uri="https://spotify-to-youtube-web.onrender.com/google-callback" if os.getenv("RENDER") else "http://127.0.0.1:5000/google-callback"
         )
         logger.info(f"Google OAuth redirect URI in callback: {flow.redirect_uri}")
         flow.fetch_token(code=request.args.get("code"))
@@ -305,7 +305,7 @@ def transfer(playlist_id):
                 flow = InstalledAppFlow.from_client_secrets_file(
                     client_secrets_file,
                     scopes=["https://www.googleapis.com/auth/youtube"],
-                    redirect_uri="https://your-app-name.herokuapp.com/google-callback" if os.getenv("HEROKU_APP_NAME") else "http://127.0.0.1:5000/google-callback"
+                    redirect_uri="https://spotify-to-youtube-web.onrender.com/google-callback" if os.getenv("RENDER") else "http://127.0.0.1:5000/google-callback"
                 )
                 logger.info(f"Google OAuth redirect URI: {flow.redirect_uri}")
                 auth_url, state = flow.authorization_url(prompt="consent")
@@ -403,4 +403,4 @@ def transfer(playlist_id):
             return f"Error: Invalid syntax in error.html: {str(te)}", 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
