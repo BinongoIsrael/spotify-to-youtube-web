@@ -157,7 +157,20 @@ def login():
     sp_oauth = get_spotify_oauth(session["session_id"])
     state = session["session_id"]
     store_oauth_state(session["session_id"], state)
-    auth_url = sp_oauth.get_authorize_url(state=state, show_dialog=True)
+    # Manually construct auth URL with show_dialog=true
+    auth_url = sp_oauth.get_authorize_url(state=state)
+    parsed_url = urllib.parse.urlparse(auth_url)
+    query_params = urllib.parse.parse_qs(parsed_url.query)
+    query_params['show_dialog'] = ['true']
+    new_query = urllib.parse.urlencode(query_params, doseq=True)
+    auth_url = urllib.parse.urlunparse((
+        parsed_url.scheme,
+        parsed_url.netloc,
+        parsed_url.path,
+        parsed_url.params,
+        new_query,
+        parsed_url.fragment
+    ))
     logger.info(f"Redirecting to Spotify auth URL with state {state}: {auth_url}")
     response = make_response(redirect(auth_url))
     spotify_cookies = [
