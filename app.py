@@ -153,15 +153,39 @@ def login():
     session["session_id"] = str(uuid.uuid4())
     app.config["SESSION_COOKIE_NAME"] = f"session_{session['session_id']}"
     session.modified = True
-    logger.info(f"Session contents in /login: {session}, cookie: {app.config['SESSION_COOKIE_NAME']}")
-    sp_oauth = get_spotify_oauth(session["session_id"])
     state = session["session_id"]
     store_oauth_state(session["session_id"], state)
-    # Manually construct auth URL with show_dialog=true
+    logger.info(f"Session contents in /login: {session}, cookie: {app.config['SESSION_COOKIE_NAME']}, state: {state}")
+    # Redirect to Spotify login page
+    spotify_login_url = "https://accounts.spotify.com/en/login"
+    response = make_response(redirect(url_for("authorize", state=state)))
+    spotify_cookies = [
+        "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
+        "sp_landing", "sp_at", "sp_f", "sp_m", "sp_new", "sp_sso"
+    ]
+    for cookie in spotify_cookies:
+        response.set_cookie(cookie, "", expires=0, domain=".spotify.com", path="/")
+        response.set_cookie(cookie, "", expires=0, domain=".accounts.spotify.com", path="/")
+    return response
+
+@app.route("/authorize")
+def authorize():
+    session_id = session.get("session_id", "unknown")
+    sp_oauth = get_spotify_oauth(session_id)
+    state = request.args.get("state")  # Get state from /login redirect
+    if not state:
+        state = str(uuid.uuid4())
+        session["session_id"] = state
+        app.config["SESSION_COOKIE_NAME"] = f"session_{state}"
+        session.modified = True
+        store_oauth_state(state, state)
+    # Conditionally add show_dialog
+    show_dialog = not session.get("token_info") and not request.args.get("force_dialog")
     auth_url = sp_oauth.get_authorize_url(state=state)
     parsed_url = urllib.parse.urlparse(auth_url)
     query_params = urllib.parse.parse_qs(parsed_url.query)
-    query_params['show_dialog'] = ['true']
+    if show_dialog:
+        query_params['show_dialog'] = ['true']
     new_query = urllib.parse.urlencode(query_params, doseq=True)
     auth_url = urllib.parse.urlunparse((
         parsed_url.scheme,
@@ -171,15 +195,8 @@ def login():
         new_query,
         parsed_url.fragment
     ))
-    logger.info(f"Redirecting to Spotify auth URL with state {state}: {auth_url}")
+    logger.info(f"Redirecting to Spotify auth URL with state {state}, show_dialog={show_dialog}: {auth_url}")
     response = make_response(redirect(auth_url))
-    spotify_cookies = [
-        "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
-        "sp_landing", "sp_at", "sp_f", "sp_m", "sp_new", "sp_sso"
-    ]
-    for cookie in spotify_cookies:
-        response.set_cookie(cookie, "", expires=0, domain=".spotify.com", path="/")
-        response.set_cookie(cookie, "", expires=0, domain=".accounts.spotify.com", path="/")
     return response
 
 @app.route("/logout")
@@ -242,7 +259,7 @@ def callback():
         sp_oauth = get_spotify_oauth(session_id)
         state = request.args.get("state")
         expected_state = get_oauth_state(session_id)
-        if not state or state != expected_state:
+        if not state or (expected_state and state != expected_state):
             raise ValueError(f"Invalid or missing state parameter: got {state}, expected {expected_state}")
         token_info = sp_oauth.get_access_token(request.args["code"], as_dict=True)
         session["token_info"] = token_info
