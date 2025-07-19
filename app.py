@@ -1,4 +1,5 @@
 from flask import Flask, redirect, request, session, render_template, url_for, make_response
+from flask_session import Session
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -15,36 +16,70 @@ from datetime import datetime, timedelta
 from jinja2 import TemplateNotFound, TemplateSyntaxError
 import tempfile
 import uuid
+import urllib.parse
+import threading
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
 load_dotenv()
 
+# Configure Flask-Session
+app.config["SESSION_TYPE"] = "filesystem"
+app.config["SESSION_FILE_DIR"] = os.path.join("data", "sessions")
+app.config["SESSION_PERMANENT"] = False
+app.config["SESSION_USE_SIGNER"] = True
+Session(app)
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Path for progress file
+# Paths for progress file
 PROGRESS_FILE = "data/transfer_progress.json"
 
-# Ensure data directory and progress file exist
+# Ensure data directory and files exist
 os.makedirs("data", exist_ok=True)
 if not os.path.exists(PROGRESS_FILE):
     with open(PROGRESS_FILE, "w") as f:
         json.dump({}, f)
 
+# Thread-safe OAuth state store
+oauth_states = {}
+oauth_states_lock = threading.Lock()
+
 # Suppress Spotify deprecation warning
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# Spotify OAuth setup with no caching
-def get_spotify_oauth():
+# Spotify OAuth setup with unique cache path per session
+def get_spotify_oauth(session_id):
+    cache_path = os.path.join("data", f".cache-{session_id}")
     return SpotifyOAuth(
         client_id=os.getenv("SPOTIFY_CLIENT_ID"),
         client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
         redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI"),
         scope="playlist-read-private playlist-read-collaborative",
-        cache_path=None  # Disable default caching
+        cache_path=cache_path,  # Unique cache path per session
+        state=session_id   # Use session_id as state for uniqueness
     )
+
+def store_oauth_state(session_id, state):
+    """Store OAuth state in thread-safe dictionary."""
+    with oauth_states_lock:
+        oauth_states[session_id] = state
+        logger.info(f"Stored OAuth state for session_id {session_id}: {state}")
+
+def get_oauth_state(session_id):
+    """Retrieve OAuth state from thread-safe dictionary."""
+    with oauth_states_lock:
+        state = oauth_states.get(session_id)
+        logger.info(f"Retrieved OAuth state for session_id {session_id}: {state}")
+        return state
+
+def remove_oauth_state(session_id):
+    """Remove OAuth state from thread-safe dictionary."""
+    with oauth_states_lock:
+        oauth_states.pop(session_id, None)
+        logger.info(f"Removed OAuth state for session_id {session_id}")
 
 def refresh_spotify_token():
     """Refresh Spotify access token if expired."""
@@ -56,7 +91,10 @@ def refresh_spotify_token():
         expires_at = token_info.get("expires_at")
         if not expires_at or datetime.now().timestamp() >= expires_at - 60:
             logger.info("Spotify token expired or about to expire, refreshing...")
-            sp_oauth = get_spotify_oauth()
+            session_id = session.get("session_id")
+            if not session_id:
+                raise ValueError("No session_id in session")
+            sp_oauth = get_spotify_oauth(session_id)
             token_info = sp_oauth.refresh_access_token(token_info["refresh_token"])
             session["token_info"] = token_info
         logger.info(f"Using Spotify access token: {token_info['access_token'][:10]}...")
@@ -84,6 +122,14 @@ def write_progress(data):
 @app.route("/")
 def index():
     try:
+        # Ensure session is fresh for new requests
+        session.pop("token_info", None)
+        # Generate a unique session ID and cookie name if not present
+        if "session_id" not in session:
+            session["session_id"] = str(uuid.uuid4())
+            app.config["SESSION_COOKIE_NAME"] = f"session_{session['session_id']}"  # Unique cookie name per session
+            session.modified = True
+        logger.info(f"Index accessed with session_id: {session['session_id']}, cookie: {app.config['SESSION_COOKIE_NAME']}")
         return render_template("index.html")
     except TemplateNotFound as e:
         logger.error(f"Template not found: {e}")
@@ -94,56 +140,88 @@ def index():
 
 @app.route("/login")
 def login():
-    # Clear existing Spotify session
+    # Clear existing Spotify session and cookies
     session.pop("token_info", None)
-    sp_oauth = get_spotify_oauth()
-    # Generate a unique state parameter to force fresh OAuth flow
-    state = str(uuid.uuid4())
-    session["spotify_oauth_state"] = state
+    # Regenerate session ID to ensure fresh session
+    session["session_id"] = str(uuid.uuid4())
+    app.config["SESSION_COOKIE_NAME"] = f"session_{session['session_id']}"  # Update cookie name
+    session.modified = True  # Mark session as modified
+    logger.info(f"Session contents in /login: {session}, cookie: {app.config['SESSION_COOKIE_NAME']}")
+    sp_oauth = get_spotify_oauth(session["session_id"])
+    state = session["session_id"]
+    store_oauth_state(session["session_id"], state)
+    # Manually construct auth URL with show_dialog=true
     auth_url = sp_oauth.get_authorize_url(state=state)
+    parsed_url = urllib.parse.urlparse(auth_url)
+    query_params = urllib.parse.parse_qs(parsed_url.query)
+    query_params['show_dialog'] = ['true']
+    new_query = urllib.parse.urlencode(query_params, doseq=True)
+    auth_url = urllib.parse.urlunparse((
+        parsed_url.scheme,
+        parsed_url.netloc,
+        parsed_url.path,
+        parsed_url.params,
+        new_query,
+        parsed_url.fragment
+    ))
     logger.info(f"Redirecting to Spotify auth URL with state {state}: {auth_url}")
-    return redirect(auth_url)
+    response = make_response(redirect(auth_url))
+    # Clear Spotify cookies before login
+    spotify_cookies = [
+        "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
+        "sp_landing", "sp_at", "sp_f", "sp_m", "sp_new", "sp_sso"
+    ]
+    for cookie in spotify_cookies:
+        response.set_cookie(cookie, "", expires=0, domain=".spotify.com")
+    return response
 
 @app.route("/logout")
 def logout():
     # Clear all session data and cached tokens
+    session_id = session.get("session_id", "unknown")
     session.clear()
-    # Remove any lingering Spotify cache files
-    for cache_file in os.listdir("."):
+    # Remove all Spotify cache files
+    for cache_file in os.listdir("data"):
         if cache_file.startswith(".cache"):
             try:
-                os.remove(cache_file)
+                os.remove(os.path.join("data", cache_file))
                 logger.info(f"Removed cache file: {cache_file}")
             except Exception as e:
                 logger.error(f"Error removing cache file {cache_file}: {e}")
-    # Clear Spotify-related cookies and redirect to Spotify logout
-    response = make_response(redirect("https://accounts.spotify.com/logout"))
-    response.set_cookie("spotify-auth-session", "", expires=0, domain=".spotify.com")
-    logger.info("Cleared Spotify session cookies and redirected to Spotify logout")
+    remove_oauth_state(session_id)
+    # Clear all Spotify and Flask cookies dynamically
+    response = make_response(redirect(url_for("index")))
+    spotify_cookies = [
+        "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
+        "sp_landing", "sp_at", "sp_f", "sp_m", "sp_new", "sp_sso"
+    ]
+    for cookie in spotify_cookies:
+        response.set_cookie(cookie, "", expires=0, domain=".spotify.com")
+    response.set_cookie(app.config["SESSION_COOKIE_NAME"], "", expires=0)
+    logger.info(f"Cleared all Spotify and Flask cookies and redirected to index for session_id: {session_id}")
     return response
-
-@app.route("/logout-callback")
-def logout_callback():
-    # After Spotify logout, redirect to index
-    return redirect(url_for("index"))
 
 @app.route("/callback")
 def callback():
     try:
-        sp_oauth = get_spotify_oauth()
+        session_id = session.get("session_id")
+        if not session_id:
+            raise ValueError("No session_id in session")
+        sp_oauth = get_spotify_oauth(session_id)
         state = request.args.get("state")
-        expected_state = session.get("spotify_oauth_state")
+        expected_state = get_oauth_state(session_id)
         if not state or state != expected_state:
             raise ValueError(f"Invalid or missing state parameter: got {state}, expected {expected_state}")
         token_info = sp_oauth.get_access_token(request.args["code"], as_dict=True)
         session["token_info"] = token_info
-        session.pop("spotify_oauth_state", None)
-        logger.info(f"Spotify token obtained for user: {token_info['access_token'][:10]}...")
+        remove_oauth_state(session_id)
+        logger.info(f"Spotify token obtained for session_id {session_id}: {token_info['access_token'][:10]}...")
+        logger.info(f"Token info in /callback: {token_info}")
         return redirect(url_for("playlists"))
     except Exception as e:
         logger.error(f"Spotify auth error: {e}")
         session.pop("token_info", None)
-        session.pop("spotify_oauth_state", None)
+        remove_oauth_state(session_id)
         try:
             return render_template("error.html", message=f"Spotify login failed: {str(e)}")
         except TemplateNotFound as te:
@@ -161,7 +239,7 @@ def playlists():
         access_token = refresh_spotify_token()
         sp = spotipy.Spotify(auth=access_token)
         user = sp.current_user()
-        logger.info(f"Fetched playlists for Spotify user: {user['id']} ({user.get('display_name', 'Unknown')})")
+        logger.info(f"Fetched playlists for Spotify user: {user['id']} ({user.get('display_name', 'Unknown')}) with session_id: {session.get('session_id')}")
         playlists = sp.current_user_playlists(limit=50)["items"]
         logger.info(f"Fetched {len(playlists)} playlists for user with token: {access_token[:10]}...")
         return render_template("playlists.html", playlists=playlists)
@@ -180,9 +258,10 @@ def playlists():
 @app.route("/google-callback")
 def google_callback():
     try:
-        state = session.get("google_oauth_state")
+        session_id = session.get("session_id", "unknown")
+        state = get_oauth_state(session_id)
         if not state:
-            raise ValueError("No OAuth state found in session")
+            raise ValueError("No OAuth state found for session")
         client_secrets_file = "client_secrets.json"
         temp_file = None
         if not os.path.exists(client_secrets_file) and os.getenv("GOOGLE_CLIENT_SECRETS"):
@@ -252,6 +331,7 @@ def google_callback():
         if temp_file:
             os.unlink(temp_file.name)
             logger.info(f"Deleted temporary client_secrets file: {temp_file.name}")
+        remove_oauth_state(session_id)
         return redirect(url_for("transfer", playlist_id=playlist_id))
     except Exception as e:
         logger.error(f"Google callback error: {e}")
@@ -277,7 +357,7 @@ def transfer(playlist_id):
         resume_key = f"transfer_{session['token_info']['access_token']}_{playlist_id}"
         progress = read_progress()
         last_transferred = progress.get(resume_key, {}).get("last_transferred", 0)
-        logger.info(f"Resuming transfer from index {last_transferred}")
+        logger.info(f"Resuming transfer from index {last_transferred} for session_id: {session.get('session_id')}")
 
         # Spotify playlist data
         access_token = refresh_spotify_token()
@@ -355,7 +435,7 @@ def transfer(playlist_id):
                 )
                 logger.info(f"Google OAuth redirect URI: {flow.redirect_uri}")
                 auth_url, state = flow.authorization_url(prompt="consent")
-                session["google_oauth_state"] = state
+                store_oauth_state(session.get("session_id", "unknown"), state)
                 session["transfer_playlist_id"] = playlist_id
                 if temp_file:
                     os.unlink(temp_file.name)
@@ -421,9 +501,9 @@ def transfer(playlist_id):
         # Clear progress and session data on completion
         progress.pop(resume_key, None)
         write_progress(progress)
-        session.pop("google_oauth_state", None)
         session.pop("google_credentials", None)
         session.pop("transfer_playlist_id", None)
+        remove_oauth_state(session.get("session_id", "unknown"))
         try:
             return render_template(
                 "transfer.html",
@@ -449,4 +529,4 @@ def transfer(playlist_id):
             return f"Error: Invalid syntax in error.html: {str(te)}", 500
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)), debug=True, threaded=True)
