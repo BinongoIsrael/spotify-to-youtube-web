@@ -227,7 +227,7 @@ def logout():
                 logger.error(f"Error removing cache file {cache_file}: {e}")
     remove_oauth_state(session_id)
     logger.info(f"Cleared all Spotify and Flask cookies and redirected to index for session_id: {session_id}")
-    return redirect(url_for("clear"))
+    return redirect(url_for("clear_session"))
 
 @app.route("/callback")
 def callback():
