@@ -192,13 +192,10 @@ def login():
     
     return response
 
-
-@app.route("/logout")
-def logout():
-    # Clear all session data and cached tokens
+@app.route("/clear")
+def clear_session():
     session_id = session.get("session_id", "unknown")
     session.clear()
-    # Remove all Spotify cache files
     for cache_file in os.listdir("data"):
         if cache_file.startswith(".cache"):
             try:
@@ -207,17 +204,30 @@ def logout():
             except Exception as e:
                 logger.error(f"Error removing cache file {cache_file}: {e}")
     remove_oauth_state(session_id)
-    # Clear all Spotify and Flask cookies dynamically
-    response = make_response(redirect(url_for("index")))
     spotify_cookies = [
         "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
         "sp_landing", "sp_at", "sp_f", "sp_m", "sp_new", "sp_sso"
     ]
+    response = make_response(redirect(url_for("login")))
     for cookie in spotify_cookies:
-        response.set_cookie(cookie, "", expires=0, domain=".spotify.com")
-    response.set_cookie(app.config["SESSION_COOKIE_NAME"], "", expires=0)
-    logger.info(f"Cleared all Spotify and Flask cookies and redirected to index for session_id: {session_id}")
+        response.set_cookie(cookie, "", expires=0, domain=".spotify.com", path="/")
+        response.set_cookie(cookie, "", expires=0, path="/")
+    logger.info(f"Cleared all cookies and session data for session_id {session_id}")
     return response
+
+@app.route("/logout")
+def logout():
+    session_id = session.get("session_id", "unknown")
+    for cache_file in os.listdir("data"):
+        if cache_file.startswith(".cache"):
+            try:
+                os.remove(os.path.join("data", cache_file))
+                logger.info(f"Removed cache file: {cache_file}")
+            except Exception as e:
+                logger.error(f"Error removing cache file {cache_file}: {e}")
+    remove_oauth_state(session_id)
+    logger.info(f"Cleared all Spotify and Flask cookies and redirected to index for session_id: {session_id}")
+    return redirect(url_for("clear"))
 
 @app.route("/callback")
 def callback():
