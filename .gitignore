@@ -5,3 +5,6 @@ venv/
 *.cache
 client_secrets.json
 data/transfer_progress.json
+data/sessions/
+
+data/.cache*
