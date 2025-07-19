@@ -140,9 +140,8 @@ def index():
 
 @app.route("/login")
 def login():
-    # Clear existing Spotify session, Flask session, and cache files
     session_id = session.get("session_id", "unknown")
-    session.clear()  # Clear all session data
+    session.clear()  # Ensure fresh session
     for cache_file in os.listdir("data"):
         if cache_file.startswith(".cache"):
             try:
@@ -151,35 +150,15 @@ def login():
             except Exception as e:
                 logger.error(f"Error removing cache file {cache_file}: {e}")
     remove_oauth_state(session_id)
-    
-    # Generate new session ID and cookie name
     session["session_id"] = str(uuid.uuid4())
     app.config["SESSION_COOKIE_NAME"] = f"session_{session['session_id']}"
     session.modified = True
     logger.info(f"Session contents in /login: {session}, cookie: {app.config['SESSION_COOKIE_NAME']}")
-    
-    # Set up Spotify OAuth
     sp_oauth = get_spotify_oauth(session["session_id"])
     state = session["session_id"]
     store_oauth_state(session["session_id"], state)
-    
-    # Manually construct auth URL with show_dialog=true
-    auth_url = sp_oauth.get_authorize_url(state=state)
-    parsed_url = urllib.parse.urlparse(auth_url)
-    query_params = urllib.parse.parse_qs(parsed_url.query)
-    query_params['show_dialog'] = ['true']
-    new_query = urllib.parse.urlencode(query_params, doseq=True)
-    auth_url = urllib.parse.urlunparse((
-        parsed_url.scheme,
-        parsed_url.netloc,
-        parsed_url.path,
-        parsed_url.params,
-        new_query,
-        parsed_url.fragment
-    ))
+    auth_url = sp_oauth.get_authorize_url(state=state, show_dialog=True)
     logger.info(f"Redirecting to Spotify auth URL with state {state}: {auth_url}")
-    
-    # Clear all cookies (Flask and Spotify)
     response = make_response(redirect(auth_url))
     spotify_cookies = [
         "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
@@ -187,32 +166,7 @@ def login():
     ]
     for cookie in spotify_cookies:
         response.set_cookie(cookie, "", expires=0, domain=".spotify.com", path="/")
-        response.set_cookie(cookie, "", expires=0, path="/")  # Clear for app domain too
-    response.set_cookie(app.config["SESSION_COOKIE_NAME"], "", expires=0, path="/")
-    
-    return response
-
-@app.route("/clear")
-def clear_session():
-    session_id = session.get("session_id", "unknown")
-    session.clear()
-    for cache_file in os.listdir("data"):
-        if cache_file.startswith(".cache"):
-            try:
-                os.remove(os.path.join("data", cache_file))
-                logger.info(f"Removed cache file: {cache_file}")
-            except Exception as e:
-                logger.error(f"Error removing cache file {cache_file}: {e}")
-    remove_oauth_state(session_id)
-    spotify_cookies = [
-        "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
-        "sp_landing", "sp_at", "sp_f", "sp_m", "sp_new", "sp_sso"
-    ]
-    response = make_response(redirect(url_for("login")))
-    for cookie in spotify_cookies:
-        response.set_cookie(cookie, "", expires=0, domain=".spotify.com", path="/")
-        response.set_cookie(cookie, "", expires=0, path="/")
-    logger.info(f"Cleared all cookies and session data for session_id {session_id}")
+        response.set_cookie(cookie, "", expires=0, domain=".accounts.spotify.com", path="/")
     return response
 
 @app.route("/logout")
@@ -226,8 +180,45 @@ def logout():
             except Exception as e:
                 logger.error(f"Error removing cache file {cache_file}: {e}")
     remove_oauth_state(session_id)
-    logger.info(f"Cleared all Spotify and Flask cookies and redirected to index for session_id: {session_id}")
-    return redirect(url_for("clear_session"))
+    session.clear()
+    spotify_cookies = [
+        "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
+        "sp_landing", "sp_at", "sp_f", "sp_m", "sp_new", "sp_sso"
+    ]
+    response = make_response(redirect(url_for("index")))
+    for cookie in spotify_cookies:
+        response.set_cookie(cookie, "", expires=0, domain=".spotify.com", path="/")
+        response.set_cookie(cookie, "", expires=0, domain=".accounts.spotify.com", path="/")
+        response.set_cookie(cookie, "", expires=0, path="/")
+    logger.info(f"Cleared all cookies and session data, redirecting to index for session_id: {session_id}")
+    return response
+
+@app.route("/clear")
+def clear_session():
+    # This route is no longer needed in the redirect chain but kept for consistency
+    session_id = session.get("session_id", "unknown")
+    session.clear()
+    for cache_file in os.listdir("data"):
+        if cache_file.startswith(".cache"):
+            try:
+                os.remove(os.path.join("data", cache_file))
+                logger.info(f"Removed cache file: {cache_file}")
+            except Exception as e:
+                logger.error(f"Error removing cache file {cache_file}: {e}")
+    remove_oauth_state(session_id)
+    # Redirect to Spotify logout (optional, as cookies should suffice)
+    spotify_logout_url = "https://www.spotify.com/us/logout/"
+    response = make_response(redirect(spotify_logout_url))
+    spotify_cookies = [
+        "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
+        "sp_landing", "sp_at", "sp_f", "sp_m", "sp_new", "sp_sso"
+    ]
+    for cookie in spotify_cookies:
+        response.set_cookie(cookie, "", expires=0, domain=".spotify.com", path="/")
+        response.set_cookie(cookie, "", expires=0, domain=".accounts.spotify.com", path="/")
+        response.set_cookie(cookie, "", expires=0, path="/")
+    logger.info(f"Initiating Spotify logout and clearing cookies for session_id: {session_id}")
+    return response
 
 @app.route("/callback")
 def callback():
