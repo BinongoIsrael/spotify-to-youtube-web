@@ -140,16 +140,29 @@ def index():
 
 @app.route("/login")
 def login():
-    # Clear existing Spotify session and cookies
-    session.pop("token_info", None)
-    # Regenerate session ID to ensure fresh session
+    # Clear existing Spotify session, Flask session, and cache files
+    session_id = session.get("session_id", "unknown")
+    session.clear()  # Clear all session data
+    for cache_file in os.listdir("data"):
+        if cache_file.startswith(".cache"):
+            try:
+                os.remove(os.path.join("data", cache_file))
+                logger.info(f"Removed cache file: {cache_file}")
+            except Exception as e:
+                logger.error(f"Error removing cache file {cache_file}: {e}")
+    remove_oauth_state(session_id)
+    
+    # Generate new session ID and cookie name
     session["session_id"] = str(uuid.uuid4())
-    app.config["SESSION_COOKIE_NAME"] = f"session_{session['session_id']}"  # Update cookie name
-    session.modified = True  # Mark session as modified
+    app.config["SESSION_COOKIE_NAME"] = f"session_{session['session_id']}"
+    session.modified = True
     logger.info(f"Session contents in /login: {session}, cookie: {app.config['SESSION_COOKIE_NAME']}")
+    
+    # Set up Spotify OAuth
     sp_oauth = get_spotify_oauth(session["session_id"])
     state = session["session_id"]
     store_oauth_state(session["session_id"], state)
+    
     # Manually construct auth URL with show_dialog=true
     auth_url = sp_oauth.get_authorize_url(state=state)
     parsed_url = urllib.parse.urlparse(auth_url)
@@ -165,15 +178,20 @@ def login():
         parsed_url.fragment
     ))
     logger.info(f"Redirecting to Spotify auth URL with state {state}: {auth_url}")
+    
+    # Clear all cookies (Flask and Spotify)
     response = make_response(redirect(auth_url))
-    # Clear Spotify cookies before login
     spotify_cookies = [
         "spotify-auth-session", "sp_t", "sp_key", "sp_dc", "__Host-auth.ext",
         "sp_landing", "sp_at", "sp_f", "sp_m", "sp_new", "sp_sso"
     ]
     for cookie in spotify_cookies:
-        response.set_cookie(cookie, "", expires=0, domain=".spotify.com")
+        response.set_cookie(cookie, "", expires=0, domain=".spotify.com", path="/")
+        response.set_cookie(cookie, "", expires=0, path="/")  # Clear for app domain too
+    response.set_cookie(app.config["SESSION_COOKIE_NAME"], "", expires=0, path="/")
+    
     return response
+
 
 @app.route("/logout")
 def logout():
