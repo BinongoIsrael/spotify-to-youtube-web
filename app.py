@@ -1,4 +1,4 @@
-from flask import Flask, redirect, request, session, render_template, url_for
+from flask import Flask, redirect, request, session, render_template, url_for, make_response
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from google_auth_oauthlib.flow import InstalledAppFlow
@@ -14,6 +14,7 @@ import warnings
 from datetime import datetime, timedelta
 from jinja2 import TemplateNotFound, TemplateSyntaxError
 import tempfile
+import uuid
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
@@ -35,13 +36,15 @@ if not os.path.exists(PROGRESS_FILE):
 # Suppress Spotify deprecation warning
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# Spotify OAuth setup
-sp_oauth = SpotifyOAuth(
-    client_id=os.getenv("SPOTIFY_CLIENT_ID"),
-    client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
-    redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI"),
-    scope="playlist-read-private playlist-read-collaborative"
-)
+# Spotify OAuth setup with no caching
+def get_spotify_oauth():
+    return SpotifyOAuth(
+        client_id=os.getenv("SPOTIFY_CLIENT_ID"),
+        client_secret=os.getenv("SPOTIFY_CLIENT_SECRET"),
+        redirect_uri=os.getenv("SPOTIFY_REDIRECT_URI"),
+        scope="playlist-read-private playlist-read-collaborative",
+        cache_path=None  # Disable default caching
+    )
 
 def refresh_spotify_token():
     """Refresh Spotify access token if expired."""
@@ -50,15 +53,17 @@ def refresh_spotify_token():
         if not token_info:
             raise ValueError("No token info in session")
         
-        # Check if token is expired or will expire soon (within 60 seconds)
         expires_at = token_info.get("expires_at")
         if not expires_at or datetime.now().timestamp() >= expires_at - 60:
             logger.info("Spotify token expired or about to expire, refreshing...")
+            sp_oauth = get_spotify_oauth()
             token_info = sp_oauth.refresh_access_token(token_info["refresh_token"])
             session["token_info"] = token_info
+        logger.info(f"Using Spotify access token: {token_info['access_token'][:10]}...")
         return token_info["access_token"]
     except Exception as e:
         logger.error(f"Error refreshing Spotify token: {e}")
+        session.pop("token_info", None)
         raise
 
 def read_progress():
@@ -89,19 +94,56 @@ def index():
 
 @app.route("/login")
 def login():
-    if "token_info" in session:
-        return redirect(url_for("playlists"))
-    auth_url = sp_oauth.get_authorize_url()
+    # Clear existing Spotify session
+    session.pop("token_info", None)
+    sp_oauth = get_spotify_oauth()
+    # Generate a unique state parameter to force fresh OAuth flow
+    state = str(uuid.uuid4())
+    session["spotify_oauth_state"] = state
+    auth_url = sp_oauth.get_authorize_url(state=state)
+    logger.info(f"Redirecting to Spotify auth URL with state {state}: {auth_url}")
     return redirect(auth_url)
+
+@app.route("/logout")
+def logout():
+    # Clear all session data and cached tokens
+    session.clear()
+    # Remove any lingering Spotify cache files
+    for cache_file in os.listdir("."):
+        if cache_file.startswith(".cache"):
+            try:
+                os.remove(cache_file)
+                logger.info(f"Removed cache file: {cache_file}")
+            except Exception as e:
+                logger.error(f"Error removing cache file {cache_file}: {e}")
+    # Clear Spotify-related cookies and redirect to Spotify logout
+    response = make_response(redirect("https://accounts.spotify.com/logout"))
+    response.set_cookie("spotify-auth-session", "", expires=0, domain=".spotify.com")
+    logger.info("Cleared Spotify session cookies and redirected to Spotify logout")
+    return response
+
+@app.route("/logout-callback")
+def logout_callback():
+    # After Spotify logout, redirect to index
+    return redirect(url_for("index"))
 
 @app.route("/callback")
 def callback():
     try:
+        sp_oauth = get_spotify_oauth()
+        state = request.args.get("state")
+        expected_state = session.get("spotify_oauth_state")
+        if not state or state != expected_state:
+            raise ValueError(f"Invalid or missing state parameter: got {state}, expected {expected_state}")
         token_info = sp_oauth.get_access_token(request.args["code"], as_dict=True)
         session["token_info"] = token_info
+        session.pop("spotify_oauth_state", None)
+        logger.info(f"Spotify token obtained for user: {token_info['access_token'][:10]}...")
         return redirect(url_for("playlists"))
     except Exception as e:
         logger.error(f"Spotify auth error: {e}")
+        session.pop("token_info", None)
+        session.pop("spotify_oauth_state", None)
         try:
             return render_template("error.html", message=f"Spotify login failed: {str(e)}")
         except TemplateNotFound as te:
@@ -118,10 +160,14 @@ def playlists():
     try:
         access_token = refresh_spotify_token()
         sp = spotipy.Spotify(auth=access_token)
+        user = sp.current_user()
+        logger.info(f"Fetched playlists for Spotify user: {user['id']} ({user.get('display_name', 'Unknown')})")
         playlists = sp.current_user_playlists(limit=50)["items"]
+        logger.info(f"Fetched {len(playlists)} playlists for user with token: {access_token[:10]}...")
         return render_template("playlists.html", playlists=playlists)
     except Exception as e:
         logger.error(f"Error fetching playlists: {e}")
+        session.pop("token_info", None)
         try:
             return render_template("error.html", message=f"Failed to fetch playlists: {str(e)}")
         except TemplateNotFound as te:

@@ -69,3 +69,8 @@ a:hover {
     color: black;
 }
 
+.login-container{
+    display: flex;
+    flex-direction: column;
+
+}

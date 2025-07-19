@@ -1,11 +1,19 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Spotify to YouTube</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotify to YouTube Playlist Transfer</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
 <body>
     <h1>Spotify to YouTube Playlist Transfer</h1>
-    <a href="{{ url_for('login') }}" class="btn">Log in with Spotify</a>
+    <p>Welcome! Log in with Spotify to transfer your playlists to YouTube.</p>
+    <div class="login-contianer">
+        <a href="{{ url_for('login') }}" class="login">Log in with Spotify</a>
+        <a href="{{ url_for('logout') }}">Log out</a>
+    <div>
+
+  
 </body>
 </html>
