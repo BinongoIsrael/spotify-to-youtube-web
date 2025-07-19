@@ -12,6 +12,8 @@ import os.path
 from google.oauth2.credentials import Credentials
 import warnings
 from datetime import datetime, timedelta
+from jinja2 import TemplateNotFound, TemplateSyntaxError
+import tempfile
 
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY")
@@ -76,7 +78,14 @@ def write_progress(data):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    try:
+        return render_template("index.html")
+    except TemplateNotFound as e:
+        logger.error(f"Template not found: {e}")
+        return "Error: index.html template not found.", 500
+    except TemplateSyntaxError as e:
+        logger.error(f"Template syntax error in index.html: {e}")
+        return f"Error: Invalid syntax in index.html: {str(e)}", 500
 
 @app.route("/login")
 def login():
@@ -93,7 +102,14 @@ def callback():
         return redirect(url_for("playlists"))
     except Exception as e:
         logger.error(f"Spotify auth error: {e}")
-        return render_template("error.html", message=f"Spotify login failed: {str(e)}")
+        try:
+            return render_template("error.html", message=f"Spotify login failed: {str(e)}")
+        except TemplateNotFound as te:
+            logger.error(f"Template not found: {te}")
+            return f"Error: error.html template not found.", 500
+        except TemplateSyntaxError as te:
+            logger.error(f"Template syntax error in error.html: {te}")
+            return f"Error: Invalid syntax in error.html: {str(te)}", 500
 
 @app.route("/playlists")
 def playlists():
@@ -106,22 +122,74 @@ def playlists():
         return render_template("playlists.html", playlists=playlists)
     except Exception as e:
         logger.error(f"Error fetching playlists: {e}")
-        return render_template("error.html", message=f"Failed to fetch playlists: {str(e)}")
+        try:
+            return render_template("error.html", message=f"Failed to fetch playlists: {str(e)}")
+        except TemplateNotFound as te:
+            logger.error(f"Template not found: {te}")
+            return f"Error: error.html template not found.", 500
+        except TemplateSyntaxError as te:
+            logger.error(f"Template syntax error in error.html: {te}")
+            return f"Error: Invalid syntax in error.html: {str(te)}", 500
 
 @app.route("/google-callback")
 def google_callback():
     try:
-        # Recreate the flow with stored state
         state = session.get("google_oauth_state")
         if not state:
             raise ValueError("No OAuth state found in session")
+        client_secrets_file = "client_secrets.json"
+        temp_file = None
+        if not os.path.exists(client_secrets_file) and os.getenv("GOOGLE_CLIENT_SECRETS"):
+            try:
+                client_secrets = json.loads(os.getenv("GOOGLE_CLIENT_SECRETS"))
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                    json.dump(client_secrets, temp_file)
+                    temp_file.flush()
+                    client_secrets_file = temp_file.name
+                logger.info(f"Created temporary client_secrets file: {client_secrets_file}")
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid GOOGLE_CLIENT_SECRETS format: {e}")
+                try:
+                    return render_template("error.html", message=f"Invalid client secrets format: {str(e)}")
+                except TemplateNotFound as te:
+                    logger.error(f"Template not found: {te}")
+                    return f"Error: error.html template not found.", 500
+                except TemplateSyntaxError as te:
+                    logger.error(f"Template syntax error in error.html: {te}")
+                    return f"Error: Invalid syntax in error.html: {str(te)}", 500
+        elif not os.path.exists(client_secrets_file):
+            logger.error("client_secrets.json not found and GOOGLE_CLIENT_SECRETS not set")
+            try:
+                return render_template("error.html", message="Client secrets file not found.")
+            except TemplateNotFound as te:
+                logger.error(f"Template not found: {te}")
+                return f"Error: error.html template not found.", 500
+            except TemplateSyntaxError as te:
+                logger.error(f"Template syntax error in error.html: {te}")
+                return f"Error: Invalid syntax in error.html: {str(te)}", 500
+
+        try:
+            with open(client_secrets_file, "r", encoding="utf-8") as f:
+                client_secrets = json.load(f)
+            logger.info(f"Loaded client_secrets: {json.dumps(client_secrets, indent=2)}")
+        except Exception as e:
+            logger.error(f"Error loading client_secrets.json: {e}")
+            try:
+                return render_template("error.html", message=f"Error loading client secrets: {str(e)}")
+            except TemplateNotFound as te:
+                logger.error(f"Template not found: {te}")
+                return f"Error: error.html template not found.", 500
+            except TemplateSyntaxError as te:
+                logger.error(f"Template syntax error in error.html: {te}")
+                return f"Error: Invalid syntax in error.html: {str(te)}", 500
+
         flow = InstalledAppFlow.from_client_secrets_file(
-            "client_secrets.json",
+            client_secrets_file,
             scopes=["https://www.googleapis.com/auth/youtube"],
             state=state,
-            redirect_uri="http://127.0.0.1:5000/google-callback"
+            redirect_uri="https://your-app-name.herokuapp.com/google-callback" if os.getenv("HEROKU_APP_NAME") else "http://127.0.0.1:5000/google-callback"
         )
-        logger.info("Google OAuth redirect URI in callback: http://127.0.0.1:5000/google-callback")
+        logger.info(f"Google OAuth redirect URI in callback: {flow.redirect_uri}")
         flow.fetch_token(code=request.args.get("code"))
         credentials = flow.credentials
         session["google_credentials"] = {
@@ -135,10 +203,23 @@ def google_callback():
         playlist_id = session.get("transfer_playlist_id")
         if not playlist_id:
             raise ValueError("No playlist ID found in session")
+        if temp_file:
+            os.unlink(temp_file.name)
+            logger.info(f"Deleted temporary client_secrets file: {temp_file.name}")
         return redirect(url_for("transfer", playlist_id=playlist_id))
     except Exception as e:
         logger.error(f"Google callback error: {e}")
-        return render_template("error.html", message=f"Google login failed: {str(e)}")
+        if temp_file:
+            os.unlink(temp_file.name)
+            logger.info(f"Deleted temporary client_secrets file: {temp_file.name}")
+        try:
+            return render_template("error.html", message=f"Google login failed: {str(e)}")
+        except TemplateNotFound as te:
+            logger.error(f"Template not found: {te}")
+            return f"Error: error.html template not found.", 500
+        except TemplateSyntaxError as te:
+            logger.error(f"Template syntax error in error.html: {te}")
+            return f"Error: Invalid syntax in error.html: {str(te)}", 500
 
 @app.route("/transfer/<playlist_id>", methods=["GET", "POST"])
 def transfer(playlist_id):
@@ -163,36 +244,90 @@ def transfer(playlist_id):
             credentials = Credentials(**session["google_credentials"])
             youtube = build("youtube", "v3", credentials=credentials)
         else:
-            # Load client secrets and initiate Google OAuth flow
+            # Load client secrets
             client_secrets_file = "client_secrets.json"
+            temp_file = None
+            if not os.path.exists(client_secrets_file) and os.getenv("GOOGLE_CLIENT_SECRETS"):
+                try:
+                    client_secrets = json.loads(os.getenv("GOOGLE_CLIENT_SECRETS"))
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as temp_file:
+                        json.dump(client_secrets, temp_file)
+                        temp_file.flush()
+                        client_secrets_file = temp_file.name
+                    logger.info(f"Created temporary client_secrets file: {client_secrets_file}")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Invalid GOOGLE_CLIENT_SECRETS format: {e}")
+                    try:
+                        return render_template("error.html", message=f"Invalid client secrets format: {str(e)}")
+                    except TemplateNotFound as te:
+                        logger.error(f"Template not found: {te}")
+                        return f"Error: error.html template not found.", 500
+                    except TemplateSyntaxError as te:
+                        logger.error(f"Template syntax error in error.html: {te}")
+                        return f"Error: Invalid syntax in error.html: {str(te)}", 500
+                except Exception as e:
+                    logger.error(f"Error processing GOOGLE_CLIENT_SECRETS: {e}")
+                    try:
+                        return render_template("error.html", message=f"Error processing client secrets: {str(e)}")
+                    except TemplateNotFound as te:
+                        logger.error(f"Template not found: {te}")
+                        return f"Error: error.html template not found.", 500
+                    except TemplateSyntaxError as te:
+                        logger.error(f"Template syntax error in error.html: {te}")
+                        return f"Error: Invalid syntax in error.html: {str(te)}", 500
+            elif not os.path.exists(client_secrets_file):
+                logger.error("client_secrets.json not found and GOOGLE_CLIENT_SECRETS not set")
+                try:
+                    return render_template("error.html", message="Client secrets file not found.")
+                except TemplateNotFound as te:
+                    logger.error(f"Template not found: {te}")
+                    return f"Error: error.html template not found.", 500
+                except TemplateSyntaxError as te:
+                    logger.error(f"Template syntax error in error.html: {te}")
+                    return f"Error: Invalid syntax in error.html: {str(te)}", 500
+
             try:
                 with open(client_secrets_file, "r", encoding="utf-8") as f:
                     client_secrets = json.load(f)
-                logger.info(f"Loaded client_secrets.json: {json.dumps(client_secrets, indent=2)}")
-            except json.JSONDecodeError as e:
-                logger.error(f"Invalid client_secrets.json format: {e}")
-                return render_template("error.html", message=f"Invalid client secrets file format: {str(e)}")
-            except FileNotFoundError as e:
-                logger.error(f"client_secrets.json not found: {e}")
-                return render_template("error.html", message="Client secrets file not found.")
+                logger.info(f"Loaded client_secrets: {json.dumps(client_secrets, indent=2)}")
             except Exception as e:
                 logger.error(f"Error loading client_secrets.json: {e}")
-                return render_template("error.html", message=f"Error loading client secrets: {str(e)}")
+                try:
+                    return render_template("error.html", message=f"Error loading client secrets: {str(e)}")
+                except TemplateNotFound as te:
+                    logger.error(f"Template not found: {te}")
+                    return f"Error: error.html template not found.", 500
+                except TemplateSyntaxError as te:
+                    logger.error(f"Template syntax error in error.html: {te}")
+                    return f"Error: Invalid syntax in error.html: {str(te)}", 500
 
             try:
                 flow = InstalledAppFlow.from_client_secrets_file(
                     client_secrets_file,
                     scopes=["https://www.googleapis.com/auth/youtube"],
-                    redirect_uri="http://127.0.0.1:5000/google-callback"
+                    redirect_uri="https://your-app-name.herokuapp.com/google-callback" if os.getenv("HEROKU_APP_NAME") else "http://127.0.0.1:5000/google-callback"
                 )
-                logger.info("Google OAuth redirect URI: http://127.0.0.1:5000/google-callback")
+                logger.info(f"Google OAuth redirect URI: {flow.redirect_uri}")
                 auth_url, state = flow.authorization_url(prompt="consent")
                 session["google_oauth_state"] = state
                 session["transfer_playlist_id"] = playlist_id
+                if temp_file:
+                    os.unlink(temp_file.name)
+                    logger.info(f"Deleted temporary client_secrets file: {temp_file.name}")
                 return redirect(auth_url)
             except Exception as e:
                 logger.error(f"Error initializing Google OAuth flow: {e}")
-                return render_template("error.html", message=f"Failed to initialize Google OAuth: {str(e)}")
+                if temp_file:
+                    os.unlink(temp_file.name)
+                    logger.info(f"Deleted temporary client_secrets file: {temp_file.name}")
+                try:
+                    return render_template("error.html", message=f"Failed to initialize Google OAuth: {str(e)}")
+                except TemplateNotFound as te:
+                    logger.error(f"Template not found: {te}")
+                    return f"Error: error.html template not found.", 500
+                except TemplateSyntaxError as te:
+                    logger.error(f"Template syntax error in error.html: {te}")
+                    return f"Error: Invalid syntax in error.html: {str(te)}", 500
 
         # Create YouTube playlist
         youtube_playlist = youtube.playlists().insert(
@@ -206,7 +341,9 @@ def transfer(playlist_id):
             }
         ).execute()
 
-        # Transfer tracks
+        # Transfer tracks and count successes
+        total_tracks = len([item for item in tracks if item["track"]])
+        successful_transfers = 0
         for i, item in enumerate(tracks[last_transferred:], start=last_transferred):
             track = item["track"]
             if not track:
@@ -227,6 +364,7 @@ def transfer(playlist_id):
                             }
                         }
                     ).execute()
+                    successful_transfers += 1
                 # Save progress
                 progress[resume_key] = {"last_transferred": i + 1}
                 write_progress(progress)
@@ -240,10 +378,29 @@ def transfer(playlist_id):
         session.pop("google_oauth_state", None)
         session.pop("google_credentials", None)
         session.pop("transfer_playlist_id", None)
-        return render_template("transfer.html", message=f"Playlist '{playlist['name']}' transferred successfully!")
+        try:
+            return render_template(
+                "transfer.html",
+                message=f"Playlist '{playlist['name']}' transferred successfully!",
+                successful_transfers=successful_transfers,
+                total_tracks=total_tracks
+            )
+        except TemplateNotFound as e:
+            logger.error(f"Template not found: {e}")
+            return f"Error: transfer.html template not found.", 500
+        except TemplateSyntaxError as e:
+            logger.error(f"Template syntax error in transfer.html: {e}")
+            return f"Error: Invalid syntax in transfer.html: {str(e)}", 500
     except Exception as e:
         logger.error(f"Transfer error: {e}")
-        return render_template("error.html", message=f"Transfer failed: {str(e)}")
+        try:
+            return render_template("error.html", message=f"Transfer failed: {str(e)}")
+        except TemplateNotFound as te:
+            logger.error(f"Template not found: {te}")
+            return f"Error: error.html template not found.", 500
+        except TemplateSyntaxError as te:
+            logger.error(f"Template syntax error in error.html: {te}")
+            return f"Error: Invalid syntax in error.html: {str(te)}", 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
